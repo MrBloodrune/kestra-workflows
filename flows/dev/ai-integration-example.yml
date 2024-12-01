@@ -1,0 +1,32 @@
+id: ai_integration_example
+namespace: dev
+
+description: |
+  Example workflow demonstrating AI integration with Ollama and OpenAI.
+  Shows how to use environment variables and handle API responses.
+
+inputs:
+  - id: prompt
+    type: STRING
+    required: true
+    defaults: "What is the capital of France?"
+
+tasks:
+  - id: ollama_query
+    type: io.kestra.plugin.scripts.http.Request
+    method: POST
+    url: "{{ vars.ollama-host }}/api/generate"
+    body: |
+      {
+        "model": "{{ vars.ollama-model }}",
+        "prompt": "{{ inputs.prompt }}"
+      }
+
+  - id: process_response
+    type: io.kestra.plugin.core.log.Log
+    message: "AI Response: {{ outputs.ollama_query.body }}"
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 */1 * * *"
