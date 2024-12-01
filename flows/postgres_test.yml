@@ -1,0 +1,22 @@
+id: postgres_test
+namespace: dev
+
+description: Test workflow to verify Git sync and PostgreSQL connectivity
+
+tasks:
+  - id: query_test
+    type: io.kestra.plugin.jdbc.postgresql.Query
+    url: jdbc:postgresql://db:5432/{{kestra.variables.db-name}}
+    username: "{{kestra.variables.db-user}}"
+    password: "{{kestra.variables.db-password}}"
+    sql: SELECT version();
+    store: true
+
+  - id: log_result
+    type: io.kestra.plugin.core.log.Log
+    message: "PostgreSQL Version: {{ outputs.query_test.rows[0].version }}"
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/5 * * * *" # Run every 5 minutes
