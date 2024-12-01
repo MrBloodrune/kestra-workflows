@@ -1,0 +1,17 @@
+id: sync_from_git
+namespace: system
+
+tasks:
+  - id: git
+    type: io.kestra.plugin.git.SyncFlows
+    url: https://github.com/MrBloodrune/kestra-workflows
+    branch: main
+    username: "{{ secret('GITHUB_USERNAME') }}"
+    password: "{{ secret('GITHUB_TOKEN') }}"
+    targetNamespace: git
+    includeChildNamespaces: true
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/1 * * * *" # every minute
