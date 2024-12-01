@@ -1,0 +1,10 @@
+id: test_postgres_connection
+namespace: dev
+
+tasks:
+  - id: test_connection
+    type: io.kestra.plugin.jdbc.postgresql.Query
+    url: jdbc:postgresql://db:5432/mydatabase
+    username: "{{kestra.variables.db-user}}"
+    password: "{{kestra.variables.db-password}}"
+    sql: SELECT NOW();
