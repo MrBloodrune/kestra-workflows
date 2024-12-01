@@ -1,0 +1,30 @@
+id: db_integration_example
+namespace: dev
+
+description: |
+  Example workflow demonstrating PostgreSQL database integration.
+  Shows how to execute queries and process results.
+
+tasks:
+  - id: query_data
+    type: io.kestra.plugin.jdbc.postgresql.Query
+    url: "jdbc:postgresql://{{ vars.db-host }}:{{ vars.db-port }}/{{ vars.db-name }}"
+    username: "{{ vars.db-user }}"
+    password: "{{ vars.db-password }}"
+    sql: |
+      SELECT tablename 
+      FROM pg_tables 
+      WHERE schemaname = 'public'
+    store: true
+
+  - id: process_results
+    type: io.kestra.plugin.scripts.nashorn.FileTransform
+    from: "{{ outputs.query_data.uri }}"
+    script: |
+      logger.info('Processing table: ' + row.tablename)
+      row
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 */1 * * *"
