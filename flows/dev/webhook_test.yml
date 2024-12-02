@@ -2,7 +2,7 @@ id: webhook_test
 namespace: dsn.dev
 
 description: |
-  Test flow for webhook functionality.
+  Test flow for webhook functionality..
   This flow will log when it's triggered and include webhook payload information.
 
 tasks:
