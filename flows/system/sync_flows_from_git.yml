@@ -16,12 +16,7 @@ tasks:
     delete: true
     dryRun: false
 triggers:
-  # Run every hour
-  - id: schedule
-    type: io.kestra.plugin.core.trigger.Schedule
-    cron: "0 * * * *"    # Fixed cron syntax - was missing asterisks and had an invalid quote
-    
-  # Trigger on GitHub webhook
+   # Trigger on GitHub webhook
   - id: github_webhook
     type: io.kestra.plugin.core.trigger.Webhook
     key: "{{ secret('WEBHOOK_KEY') }}"
