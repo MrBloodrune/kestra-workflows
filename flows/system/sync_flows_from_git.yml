@@ -2,10 +2,14 @@ id: sync_flows_from_git
 namespace: dsn.system
 
 description: |
-  Syncs Kestra workflows from Git repository to maintain version control.
-  This flow runs on a schedule and when triggered by GitHub webhooks.
+  Initial Git sync flow that will sync all workflows from repository.
+  Note: The dsn and dsn.system namespaces must exist before this flow can run.
 
 tasks:
+  - id: check_namespaces
+    type: io.kestra.plugin.core.log.Log
+    message: "Starting Git sync - ensure dsn and dsn.system namespaces exist"
+
   - id: git_sync
     type: io.kestra.plugin.git.SyncFlows
     url: https://github.com/MrBloodrune/kestra-workflows
