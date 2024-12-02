@@ -23,8 +23,3 @@ tasks:
     script: |
       logger.info('Processing table: ' + row.tablename)
       row
-
-triggers:
-  - id: schedule
-    type: io.kestra.plugin.core.trigger.Schedule
-    cron: "0 */1 * * *"
