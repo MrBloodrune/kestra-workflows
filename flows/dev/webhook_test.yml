@@ -1,0 +1,20 @@
+id: webhook_test
+namespace: dsn.dev
+
+description: |
+  Test flow for webhook functionality.
+  This flow will log when it's triggered and include webhook payload information.
+
+tasks:
+  - id: log_trigger
+    type: io.kestra.plugin.core.log.Log
+    message: "Webhook triggered at {{ trigger.date }} with payload: {{ trigger }}"
+
+  - id: return_data
+    type: io.kestra.plugin.core.debug.Return
+    format: "Webhook data received and processed successfully"
+
+triggers:
+  - id: webhook
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: "{{ secret('WEBHOOK_KEY') }}"
