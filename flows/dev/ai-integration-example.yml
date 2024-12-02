@@ -25,8 +25,3 @@ tasks:
   - id: process_response
     type: io.kestra.plugin.core.log.Log
     message: "AI Response: {{ outputs.ollama_query.body }}"
-
-triggers:
-  - id: schedule
-    type: io.kestra.plugin.core.trigger.Schedule
-    cron: "0 0 * * *"
