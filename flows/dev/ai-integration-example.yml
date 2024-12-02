@@ -1,5 +1,5 @@
 id: ai_integration_example
-namespace: dev
+namespace: dsn.dev
 
 description: |
   Example workflow demonstrating AI integration with Ollama and OpenAI.
