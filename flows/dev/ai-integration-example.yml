@@ -13,9 +13,9 @@ inputs:
 
 tasks:
   - id: ollama_query
-    type: io.kestra.plugin.scripts.http.Request
+    type: io.kestra.plugin.core.http.Request
     method: POST
-    url: "{{ vars.ollama-host }}/api/generate"
+    uri: "{{ vars.ollama-host }}/api/generate"
     body: |
       {
         "model": "{{ vars.ollama-model }}",
