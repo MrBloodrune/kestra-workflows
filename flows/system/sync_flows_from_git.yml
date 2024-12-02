@@ -2,7 +2,7 @@ id: sync_flows_from_git
 namespace: dsn.system
 description: |
   Initial Git sync flow that will sync all workflows from repository.
-  Note: The dsn and child dsn.system namespaces will be created with this flow.
+  Note: The dsn and child dsn.system namespaces will be created with this flow..
 tasks:
   - id: git_sync
     type: io.kestra.plugin.git.SyncFlows
