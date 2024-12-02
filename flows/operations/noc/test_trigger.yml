@@ -3,7 +3,7 @@ namespace: dsn.operations.noc
 
 description: |
   A simple test workflow to verify our Git sync configuration is working.
-  This should be picked up by the sync_flows_from_git flow.
+  This should be picked up by the sync_flows_from_git flow..
 
 tasks:
   - id: test
