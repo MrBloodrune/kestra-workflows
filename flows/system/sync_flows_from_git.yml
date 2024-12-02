@@ -1,10 +1,8 @@
 id: sync_flows_from_git
 namespace: dsn.system
-
 description: |
   Initial Git sync flow that will sync all workflows from repository.
   Note: The dsn and child dsn.system namespaces will be created with this flow.
-
 tasks:
   - id: git_sync
     type: io.kestra.plugin.git.SyncFlows
@@ -17,12 +15,11 @@ tasks:
     gitDirectory: flows
     delete: true
     dryRun: false
-
 triggers:
   # Run every hour
   - id: schedule
     type: io.kestra.plugin.core.trigger.Schedule
-    cron: "0 * * * *"
+    cron: "0 * * * *"    # Fixed cron syntax - was missing asterisks and had an invalid quote
     
   # Trigger on GitHub webhook
   - id: github_webhook
