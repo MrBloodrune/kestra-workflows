@@ -1,5 +1,5 @@
 id: db_integration_example
-namespace: dev
+namespace: dsn.dev
 
 description: |
   Example workflow demonstrating PostgreSQL database integration.
