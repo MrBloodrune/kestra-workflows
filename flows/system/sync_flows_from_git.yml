@@ -1,5 +1,5 @@
 id: sync_flows_from_git
-namespace: dsn
+namespace: dsn.system
 
 description: |
   Initial Git sync flow that will sync all workflows from repository.
