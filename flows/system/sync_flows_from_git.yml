@@ -3,18 +3,14 @@ namespace: dsn.system
 
 description: |
   Initial Git sync flow that will sync all workflows from repository.
-  Note: The dsn and dsn.system namespaces must exist before this flow can run.
+  Note: The dsn and child dsn.system namespaces will be created with this flow.
 
 tasks:
-  - id: check_namespaces
-    type: io.kestra.plugin.core.log.Log
-    message: "Starting Git sync - ensure dsn and dsn.system namespaces exist"
-
   - id: git_sync
     type: io.kestra.plugin.git.SyncFlows
     url: https://github.com/MrBloodrune/kestra-workflows
     branch: main
-    username: git_username
+    username: "{{ secret('GITHUB_USERNAME') }}"
     password: "{{ secret('GITHUB_ACCESS_TOKEN') }}"
     targetNamespace: dsn
     includeChildNamespaces: true
