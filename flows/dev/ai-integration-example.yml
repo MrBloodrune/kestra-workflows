@@ -29,4 +29,4 @@ tasks:
 triggers:
   - id: schedule
     type: io.kestra.plugin.core.trigger.Schedule
-    cron: "0 */1 * * *"
+    cron: "0 0 * * *"
