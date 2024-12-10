@@ -1,0 +1,4 @@
+namespace: dsn.prod.provisioning
+vars:
+  environment: prod
+  service: provisioning
