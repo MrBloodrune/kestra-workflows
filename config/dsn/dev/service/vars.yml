@@ -1,0 +1,5 @@
+namespace: dsn.dev.service
+vars:
+  environment: dev
+  service: service
+  description: "Service variables"

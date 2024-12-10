@@ -1,0 +1,5 @@
+namespace: dsn.dev.orchestration
+vars:
+  environment: dev
+  service: orchestration
+  description: "Orchestration variables"

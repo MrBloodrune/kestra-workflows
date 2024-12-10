@@ -1,0 +1,5 @@
+namespace: dsn.prod.system
+vars:
+  environment: prod
+  service: system
+  description: "System variables"

@@ -1,0 +1,5 @@
+namespace: dsn.dev.system
+vars:
+  environment: dev
+  service: system
+  description: "System variables"

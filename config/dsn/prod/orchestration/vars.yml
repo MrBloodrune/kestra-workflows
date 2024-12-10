@@ -1,0 +1,5 @@
+namespace: dsn.prod.orchestration
+vars:
+  environment: prod
+  service: orchestration
+  description: "Orchestration variables"
