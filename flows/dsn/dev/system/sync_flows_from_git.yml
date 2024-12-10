@@ -1,0 +1,22 @@
+id: sync_flows_from_git
+namespace: dsn.system
+description: |
+  Initial Git sync flow that will sync all workflows from repository.
+  Note: The dsn and child dsn.system namespaces will be created with this flow.
+tasks:
+  - id: git_sync
+    type: io.kestra.plugin.git.SyncFlows
+    url: https://github.com/MrBloodrune/kestra-workflows
+    branch: main
+    username: "{{ secret('GITHUB_USERNAME') }}"
+    password: "{{ secret('GITHUB_ACCESS_TOKEN') }}"
+    targetNamespace: dsn
+    includeChildNamespaces: true
+    gitDirectory: flows
+    delete: true
+    dryRun: false
+triggers:
+   # Trigger on GitHub webhook
+  - id: github_webhook
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: "{{ secret('WEBHOOK_KEY') }}"
