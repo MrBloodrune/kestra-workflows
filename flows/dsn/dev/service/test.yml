@@ -1,0 +1,8 @@
+id: "test_manual_run"
+namespace: "dsn.dev.service"
+
+tasks:
+  - id: "echo"
+    type: "io.kestra.core.tasks.scripts.Bash"
+    commands:
+      - echo "Test manual run for service"
