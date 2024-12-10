@@ -1,0 +1,5 @@
+namespace: dsn.dev.integration
+vars:
+  environment: dev
+  service: integration
+  description: "Integration service variables"

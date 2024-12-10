@@ -1,0 +1,5 @@
+namespace: dsn.dev.reporting
+vars:
+  environment: dev
+  service: reporting
+  description: "Reporting service variables"

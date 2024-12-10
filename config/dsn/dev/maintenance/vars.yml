@@ -1,0 +1,5 @@
+namespace: dsn.dev.maintenance
+vars:
+  environment: dev
+  service: maintenance
+  description: "Maintenance service variables"

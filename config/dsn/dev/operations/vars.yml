@@ -1,0 +1,5 @@
+namespace: dsn.dev.operations
+vars:
+  environment: dev
+  service: operations
+  description: "Operations service variables"

@@ -1,0 +1,5 @@
+namespace: dsn.prod.maintenance
+vars:
+  environment: prod
+  service: maintenance
+  description: "Maintenance service variables"

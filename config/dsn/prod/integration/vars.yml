@@ -1,0 +1,5 @@
+namespace: dsn.prod.integration
+vars:
+  environment: prod
+  service: integration
+  description: "Integration service variables"

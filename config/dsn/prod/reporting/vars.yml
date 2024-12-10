@@ -1,0 +1,5 @@
+namespace: dsn.prod.reporting
+vars:
+  environment: prod
+  service: reporting
+  description: "Reporting service variables"
