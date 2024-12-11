@@ -1,0 +1,7 @@
+id: var_test
+namespace: dsn.prod.system
+
+tasks:
+  - id: log_test
+    type: io.kestra.plugin.core.log.Log
+    message: "Namespace: {{ namespace.vars }}"
