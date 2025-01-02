@@ -1,0 +1,251 @@
+id: "jira-field-mapping-sync"
+namespace: "core.jira"
+
+description: |
+  Synchronizes Jira field mappings with local database.
+  Test version with direct values - DO NOT USE IN PRODUCTION.
+  Replace these values with proper secret management before deployment.
+
+variables:
+  # Testing configuration - Replace with your values
+  jira_base_url: "https://base.url.net"
+  jira_auth: "AUTH_TOKEN" # base64 encode of "email:api-token"
+  db_schema: "core" # Target database schema
+
+tasks:
+  # Stage 1: Extract Projects from Jira
+  - id: "get_projects"
+    type: "io.kestra.plugin.scripts.python.Script"
+    runner: DOCKER
+    docker:
+      image: "python:3.9-slim"
+    beforeCommands:
+      - "pip install requests"
+      - "pip install kestra"
+    retry:
+      type: "constant"
+      maxAttempt: 3
+      interval: PT1M
+    script: |
+      import requests
+      import json
+      from kestra import Kestra
+
+      logger = Kestra.logger()
+      logger.info("Starting Jira project fetch")
+
+      try:
+          response = requests.get(
+              "{{ vars.jira_base_url }}/rest/api/2/project",
+              headers={
+                  "Authorization": f"Basic {{ vars.jira_auth }}",
+                  "Accept": "application/json"
+              },
+              timeout=30
+          )
+          response.raise_for_status()
+          
+          projects = response.json()
+          logger.info(f"Retrieved {len(projects)} projects")
+          
+          Kestra.outputs({
+              "projects": projects,
+              "project_count": len(projects)
+          })
+          logger.info(f"projects.json content: {projects}")
+      except requests.exceptions.RequestException as e:
+          logger.error(f"Error fetching projects: {str(e)}")
+          raise
+  - id: get_field_mappings
+    type: io.kestra.plugin.scripts.python.Script
+    beforeCommands:
+      - pip install requests
+      - pip install kestra
+    docker:
+      image: python:3.9-slim
+      pullPolicy: ALWAYS
+    runner: DOCKER
+    inputFiles:
+      projects.json: "{{ outputs.get_projects.vars.projects}}"
+    script: |
+      import requests
+      import json
+      from datetime import datetime
+      from kestra import Kestra
+
+      logger = Kestra.logger()
+      logger.info("Starting field mapping extraction")
+      
+      # Read the 'projects.json' file passed via inputFiles
+      with open("projects.json", "r") as f:
+          projects = json.load(f)
+
+      logger.info(f"projects.json content: {projects}")
+      
+      all_mappings = []
+      error_count = 0
+
+      for project in projects:
+          project_key = project['key']
+          logger.info(f"Processing project: {project_key}")
+
+          try:
+              response = requests.get(
+                  "{{ vars.jira_base_url }}/rest/api/2/issue/createmeta",
+                  params={
+                      "projectKeys": project_key,
+                      "expand": "projects.issuetypes.fields"
+                  },
+                  headers={
+                      "Authorization": f"Basic {{ vars.jira_auth }}",
+                      "Accept": "application/json"
+                  },
+                  timeout=30
+              )
+              response.raise_for_status()
+
+              metadata = response.json()
+
+              for project_data in metadata.get('projects', []):
+                  for issuetype in project_data.get('issuetypes', []):
+                      for field_id, field_meta in issuetype.get('fields', {}).items():
+                          mapping = {
+                              "project_key": project_key,
+                              "project_id": project_data['id'],
+                              "issuetype_id": issuetype['id'],
+                              "issuetype_name": issuetype['name'],
+                              "field_id": field_id,
+                              "field_name": field_meta['name'],
+                              "is_required": field_meta.get('required', False),
+                              "field_schema": json.dumps(field_meta.get('schema', {})),
+                              "sync_date": datetime.now().isoformat()
+                          }
+                          all_mappings.append(mapping)
+
+          except Exception as e:
+              error_count += 1
+              logger.error(f"Error processing project {project_key}: {str(e)}")
+              continue
+
+      logger.info(f"Processed {len(all_mappings)} field mappings")
+      if error_count > 0:
+          logger.warning(f"Encountered {error_count} errors during processing")
+
+      Kestra.outputs({
+          "field_mappings": all_mappings,
+          "mapping_count": len(all_mappings),
+          "error_count": error_count
+      })
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+
+  # Stage 3: Store Field Mappings in Database
+  - id: "store_mappings"
+    type: "io.kestra.plugin.jdbc.postgresql.Query"
+    url: "jdbc:postgresql://postgres:5432/database01"
+    username: "postgres"
+    password: "your_secure_password"
+    fetchOne: false
+    sql: |
+      -- Create schema if it doesn't exist
+      CREATE SCHEMA IF NOT EXISTS {{ vars.db_schema }};
+
+      -- Create tables following data lifecycle stages
+      CREATE TABLE IF NOT EXISTS {{ vars.db_schema }}.jira_field_mappings_raw (
+          id SERIAL PRIMARY KEY,
+          project_key text NOT NULL,
+          project_id text NOT NULL,
+          issuetype_id text NOT NULL,
+          issuetype_name text NOT NULL,
+          field_id text NOT NULL,
+          field_name text NOT NULL,
+          is_required boolean NOT NULL DEFAULT false,
+          field_schema jsonb,
+          sync_date timestamp with time zone NOT NULL,
+          created_at timestamp with time zone DEFAULT NOW(),
+          UNIQUE(project_key, issuetype_id, field_id, sync_date)
+      );
+
+      CREATE TABLE IF NOT EXISTS {{ vars.db_schema }}.jira_field_mappings_clean (
+          id SERIAL PRIMARY KEY,
+          project_key text NOT NULL,
+          project_id text NOT NULL,
+          issuetype_id text NOT NULL,
+          issuetype_name text NOT NULL,
+          field_id text NOT NULL,
+          field_name text NOT NULL,
+          is_required boolean NOT NULL DEFAULT false,
+          field_schema jsonb,
+          sync_date timestamp with time zone NOT NULL,
+          created_at timestamp with time zone DEFAULT NOW(),
+          validated_at timestamp with time zone DEFAULT NOW(),
+          UNIQUE(project_key, issuetype_id, field_id)
+      );
+
+      -- Create indexes for improved query performance
+      CREATE INDEX IF NOT EXISTS idx_raw_project_fields
+        ON {{ vars.db_schema }}.jira_field_mappings_raw(project_key);
+
+      CREATE INDEX IF NOT EXISTS idx_raw_sync_date
+        ON {{ vars.db_schema }}.jira_field_mappings_raw(sync_date);
+
+      CREATE INDEX IF NOT EXISTS idx_clean_project_fields
+        ON {{ vars.db_schema }}.jira_field_mappings_clean(project_key);
+
+      -- Insert data into raw table
+      INSERT INTO {{ vars.db_schema }}.jira_field_mappings_raw (
+          project_key, project_id, issuetype_id, issuetype_name,
+          field_id, field_name, is_required, field_schema, sync_date
+      )
+      SELECT
+          project_key, project_id, issuetype_id, issuetype_name,
+          field_id, field_name, is_required::boolean,
+          field_schema::jsonb, sync_date::timestamp
+      FROM json_to_recordset('{{ outputs.get_field_mappings.vars.field_mappings}}') AS x(
+          project_key text,
+          project_id text,
+          issuetype_id text,
+          issuetype_name text,
+          field_id text,
+          field_name text,
+          is_required text,
+          field_schema text,
+          sync_date text
+      );
+
+      -- Update clean table with latest data
+      INSERT INTO {{ vars.db_schema }}.jira_field_mappings_clean (
+          project_key, project_id, issuetype_id, issuetype_name,
+          field_id, field_name, is_required, field_schema, sync_date
+      )
+      SELECT DISTINCT ON (project_key, issuetype_id, field_id)
+          project_key, project_id, issuetype_id, issuetype_name,
+          field_id, field_name, is_required, field_schema, sync_date
+      FROM {{ vars.db_schema }}.jira_field_mappings_raw
+      ORDER BY project_key, issuetype_id, field_id, sync_date DESC
+      ON CONFLICT (project_key, issuetype_id, field_id)
+      DO UPDATE SET
+          project_id = EXCLUDED.project_id,
+          issuetype_name = EXCLUDED.issuetype_name,
+          field_name = EXCLUDED.field_name,
+          is_required = EXCLUDED.is_required,
+          field_schema = EXCLUDED.field_schema,
+          sync_date = EXCLUDED.sync_date,
+          validated_at = NOW();
+
+  # Stage 4: Generate Sync Report
+  - id: "generate_report"
+    type: "io.kestra.plugin.jdbc.postgresql.Query"
+    # e.g. database credentials
+    url: "jdbc:postgresql://postgres:5432/database01"
+    username: "postgres"
+    password: "your_secure_password"
+    fetchOne: true
+    sql: |
+      SELECT
+          COUNT(*) as total_mappings,
+          COUNT(DISTINCT project_key) as total_projects,
+          COUNT(DISTINCT issuetype_id) as total_issuetypes,
+          COUNT(DISTINCT field_id) as total_fields,
+          NOW() as report_time
+      FROM {{ vars.db_schema }}.jira_field_mappings_clean;
