@@ -1,0 +1,203 @@
+id: "jira_get_all_fields_ouput_map_and_table"
+namespace: "dev.integration"
+description: |
+  Fetches all Jira fields and their metadata to create a mapping file.
+  Used for generating PostgreSQL table schemas that can accommodate all Jira fields.
+  Outputs field definitions in a structured JSON format.
+
+variables:
+  jira_base_url: "https://base.url.net"
+  jira_auth: "email:token | base64"
+
+tasks:
+  - id: working_dir
+    type: io.kestra.plugin.core.flow.WorkingDirectory
+    tasks:
+      - id: "fetch_field_definitions"
+        type: "io.kestra.plugin.scripts.python.Script"
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+          pullPolicy: IF_NOT_PRESENT
+          memory:
+            memory: "1GB"
+          cpu:
+            cpus: 1
+        containerImage: "kestra-python:latest"
+        timeout: PT5M
+        retry:
+          type: constant
+          interval: PT1M
+          maxAttempt: 3
+        outputFiles:
+          - "*.json"
+          - "*.sql"
+        script: |
+          import requests
+          import json
+          from datetime import datetime
+          from kestra import Kestra
+
+          logger = Kestra.logger()
+          
+          def get_pg_type(field):
+              """Determine PostgreSQL type based on Jira field"""
+              # Default to jsonb for complex fields
+              if not isinstance(field.get('schema'), dict):
+                  return "jsonb"
+                  
+              field_type = field.get('schema', {}).get('type', 'string')
+              
+              type_mapping = {
+                  "string": "text",
+                  "number": "numeric",
+                  "datetime": "timestamp with time zone",
+                  "date": "date",
+                  "array": "jsonb",
+                  "option": "jsonb",
+                  "project": "jsonb",
+                  "group": "jsonb",
+                  "user": "jsonb",
+                  "any": "jsonb"
+              }
+              
+              return type_mapping.get(field_type, "jsonb")
+          
+          def sanitize_column_name(name):
+              """Convert field name to valid PostgreSQL column name"""
+              # Remove special characters and replace with underscore
+              sanitized = ''.join(c if c.isalnum() else '_' for c in name.lower())
+              # Ensure it doesn't start with a number
+              if sanitized[0].isdigit():
+                  sanitized = 'f_' + sanitized
+              # Remove consecutive underscores
+              while '__' in sanitized:
+                  sanitized = sanitized.replace('__', '_')
+              # Remove trailing underscore
+              sanitized = sanitized.rstrip('_')
+              return sanitized[:63]  # PostgreSQL column name length limit
+          
+          def fetch_fields():
+              """Fetch all fields from Jira and create mapping"""
+              logger.info("Fetching Jira fields")
+              try:
+                  response = requests.get(
+                      "{{ vars.jira_base_url }}/rest/api/3/field",
+                      headers={
+                          "Authorization": f"Basic {{ vars.jira_auth }}",
+                          "Accept": "application/json"
+                      },
+                      timeout=30
+                  )
+                  response.raise_for_status()
+                  fields = response.json()
+                  
+                  # Log first field for debugging
+                  if fields:
+                      logger.info(f"Sample field structure: {json.dumps(fields[0], indent=2)}")
+                  
+                  field_mapping = {
+                      "metadata": {
+                          "total_fields": len(fields),
+                          "generated_at": datetime.now().isoformat(),
+                          "includes_custom_fields": any(field.get("custom", False) for field in fields)
+                      },
+                      "fields": [],
+                      "postgres_schema": []
+                  }
+                  
+                  # Add standard fields first
+                  standard_fields = [
+                      ("issue_id", "text"),
+                      ("issue_key", "text"),
+                      ("project_key", "text"),
+                      ("issue_type", "text"),
+                      ("created_at", "timestamp with time zone"),
+                      ("updated_at", "timestamp with time zone")
+                  ]
+                  
+                  field_mapping["postgres_schema"].extend([
+                      f"{name} {pg_type}" for name, pg_type in standard_fields
+                  ])
+                  
+                  for field in fields:
+                      try:
+                          field_id = field.get("id", "")
+                          field_name = field.get("name", "")
+                          is_custom = field.get("custom", False)
+                          
+                          # Generate column name
+                          base_name = f"{'custom_' if is_custom else ''}{sanitize_column_name(field_name)}"
+                          column_name = base_name
+                          
+                          # Determine PostgreSQL type
+                          pg_type = get_pg_type(field)
+                          
+                          field_info = {
+                              "id": field_id,
+                              "name": field_name,
+                              "key": field.get("key", ""),
+                              "custom": is_custom,
+                              "column_name": column_name,
+                              "postgres_type": pg_type,
+                              "schema": field.get("schema", {})
+                          }
+                          
+                          field_mapping["fields"].append(field_info)
+                          field_mapping["postgres_schema"].append(
+                              f"{column_name} {pg_type}"
+                          )
+                          
+                      except Exception as e:
+                          logger.warning(f"Error processing field {field.get('id', 'unknown')}: {str(e)}")
+                          continue
+                  
+                  return field_mapping
+              
+              except Exception as e:
+                  logger.error(f"Error fetching fields: {str(e)}")
+                  raise
+          
+          try:
+              # Fetch and process fields
+              field_mapping = fetch_fields()
+              logger.info(f"Processed {len(field_mapping['fields'])} fields")
+              
+              # Save detailed mapping
+              with open("jira_field_mapping.json", "w") as f:
+                  json.dump(field_mapping, f, indent=2)
+              logger.info("Saved field mapping to jira_field_mapping.json")
+              
+              # Generate CREATE TABLE statement
+              table_sql = "CREATE TABLE jira_issues (\n"
+              table_sql += "  id SERIAL PRIMARY KEY,\n"
+              table_sql += "  " + ",\n  ".join(field_mapping["postgres_schema"])
+              table_sql += "\n);"
+              
+              # Save CREATE TABLE statement
+              with open("create_jira_table.sql", "w") as f:
+                  f.write(table_sql)
+              logger.info("Saved CREATE TABLE statement to create_jira_table.sql")
+              
+              # Store metadata in outputs
+              Kestra.outputs({
+                  "total_fields": field_mapping["metadata"]["total_fields"],
+                  "generated_at": field_mapping["metadata"]["generated_at"]
+              })
+              
+          except Exception as e:
+              logger.error(f"Fatal error: {str(e)}")
+              raise
+
+outputs:
+  - id: total_fields
+    type: INT
+    value: "{{ outputs.fetch_field_definitions.vars.total_fields }}"
+  - id: generated_at
+    type: STRING
+    value: "{{ outputs.fetch_field_definitions.vars.generated_at }}"
+  - id: mapping_file
+    type: STRING
+    value: "{{ outputs.working_dir.outputFiles['jira_field_mapping.json'] }}"
+  - id: sql_file
+    type: STRING
+    value: "{{ outputs.working_dir.outputFiles['create_jira_table.sql'] }}"
