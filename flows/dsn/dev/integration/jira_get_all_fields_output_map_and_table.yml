@@ -168,8 +168,8 @@ tasks:
               logger.info("Saved field mapping to jira_field_mapping.json")
               
               # Generate CREATE TABLE statement
-              table_sql = "CREATE TABLE jira_issues (\n"
-              table_sql += "  id SERIAL PRIMARY KEY,\n"
+              table_sql = "CREATE TABLE raw.jira_issues (\n"
+              table_sql += "  id BIGSERIAL PRIMARY KEY,\n"
               table_sql += "  " + ",\n  ".join(field_mapping["postgres_schema"])
               table_sql += "\n);"
               
