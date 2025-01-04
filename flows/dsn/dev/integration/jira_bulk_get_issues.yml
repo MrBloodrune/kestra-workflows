@@ -1,0 +1,126 @@
+id: jira_bulk_get_issues
+namespace: "dev.integration"
+description: |
+  Bulk fetches Jira issues for specified projects.
+  Stores issues as JSON file in Kestra storage for further processing.
+  Uses WorkingDirectory for proper file handling and implements robust error handling.
+
+variables:
+  jira_base_url: "https://base.url.net"
+  jira_auth: "email:key ecode64"
+
+tasks:
+  - id: working_dir
+    type: io.kestra.plugin.core.flow.WorkingDirectory
+    tasks:
+      - id: "fetch_jira_issues"
+        type: "io.kestra.plugin.scripts.python.Script"
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+          pullPolicy: IF_NOT_PRESENT
+          memory:
+            memory: "2GB"
+          cpu:
+            cpus: 1
+        containerImage: "kestra-python:latest"
+        timeout: PT10M
+        retry:
+          type: constant
+          interval: PT1M
+          maxAttempt: 3
+        outputFiles:
+          - "*.json"
+        script: |
+          import requests
+          import json
+          from datetime import datetime
+          from kestra import Kestra
+
+          # Get variables from Kestra context
+          jira_base_url = "{{ vars.jira_base_url }}"
+          jira_auth = "{{ vars.jira_auth }}"
+
+          logger = Kestra.logger()
+          logger.info("Starting Jira issue fetch")
+
+          def fetch_issues(start_at=0, max_results=100):
+              """Fetch batch of issues from Jira"""
+              logger.info(f"Fetching batch starting at {start_at}")
+              try:
+                  url = f"{jira_base_url}/rest/api/3/search"
+                  params = {
+                      "jql": "project in ('PRO','JECT')",
+                      "startAt": start_at,
+                      "maxResults": max_results,
+                      "fields": "*all",
+                      "expand": "renderedFields,changelog,schema,names"
+                  }
+                  response = requests.get(
+                      url,
+                      params=params,
+                      headers={
+                          "Authorization": f"Basic {jira_auth}",
+                          "Accept": "application/json"
+                      },
+                      timeout=30
+                  )
+                  response.raise_for_status()
+                  return response.json()
+              except requests.exceptions.RequestException as e:
+                  logger.error(f"Request failed: {str(e)}")
+                  raise
+              except Exception as e:
+                  logger.error(f"Unexpected error: {str(e)}")
+                  raise
+
+          try:
+              # Initial fetch to get total
+              result = fetch_issues()
+              total_issues = result["total"]
+              all_issues = result["issues"]
+              
+              logger.info(f"Found {total_issues} total issues")
+              
+              # Fetch remaining issues if any
+              start_at = len(all_issues)
+              while start_at < total_issues:
+                  logger.info(f"Progress: {start_at}/{total_issues}")
+                  result = fetch_issues(start_at)
+                  all_issues.extend(result["issues"])
+                  start_at += len(result["issues"])
+
+              logger.info(f"Successfully fetched {len(all_issues)} issues")
+              
+              # Save issues to file in working directory
+              output_file = "jira_issues.json"
+              logger.info(f"Writing to file: {output_file}")
+              
+              issues_json = json.dumps(all_issues, indent=2)
+              try:
+                  with open(output_file, "w") as f:
+                      f.write(issues_json)
+                  logger.info(f"Successfully wrote {len(all_issues)} issues to {output_file}")
+              except IOError as e:
+                  logger.error(f"Failed to write file: {str(e)}")
+                  raise
+              
+              # Store metadata separately from large data
+              Kestra.outputs({
+                  "total_count": len(all_issues),
+                  "fetch_date": datetime.now().isoformat()
+              })
+
+          except Exception as e:
+              logger.error(f"Fatal error: {str(e)}")
+              raise
+
+outputs:
+  - id: total_count
+    type: INT
+    value: "{{ outputs.fetch_jira_issues.vars.total_count }}"
+  - id: fetch_date
+    type: STRING
+    value: "{{ outputs.fetch_jira_issues.vars.fetch_date }}"
+  - id: issues_file
+    type: STRING
+    value: "{{ outputs.working_dir.outputFiles['jira_issues.json'] }}"
