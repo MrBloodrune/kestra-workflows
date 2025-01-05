@@ -6,8 +6,8 @@ description: |
   Outputs field definitions in a structured JSON format.
 
 variables:
-  jira_base_url: "https://diamondstatenetworks.atlassian.net"
-  jira_auth: "Y2hyaXN0aWFuQGRpYW1vbmRzdGF0ZW5ldHdvcmtzLmNvbTpBVEFUVDN4RmZHRjBOTk0wYWJ5MHZfMEp6NHVlWHZEMGQxM3VYbzIxZkdzcGFUVGlwc2JZZUpjcjhZOTFkejBqeGcyUDlQcTV3eTNVNkJ1R3JrVk5xbmRNcGRIRnNmMlAwcW1hNHV4UGw4Z3pvNU8yRl8ybk5fNnhTY1p5UUtiMG9ablJKdlE2cEpZc2NTbVFjN0QyWFl6LV9wX1dyWVIwZjNpQ0hydzFyNDR4UFFKdTY5MjJaLXM9MzdFMkVFODA="
+  jira_base_url: "https://base.url.net"
+  jira_auth: "email:token |base64"
 
 tasks:
   - id: working_dir
