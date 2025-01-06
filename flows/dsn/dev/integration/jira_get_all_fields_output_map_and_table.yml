@@ -2,7 +2,7 @@ id: "jira_get_all_fields_output_map_and_table"
 namespace: "dev.integration"
 description: |
   Fetches all Jira fields and their metadata to create a mapping file.
-  Used for generating PostgreSQL table schemas that can accommodate all Jira fields.
+  Used for generating PostgreSQL table schema that can accommodate all Jira fields.
   Outputs field definitions in a structured JSON format.
 
 variables:
@@ -109,18 +109,17 @@ tasks:
                           field_name = field.get("name", "")
                           is_custom = field.get("custom", False)
                           
-                          # Use field ID directly as column name
-                          column_name = field_id
+                          column_name = field_id.lower()
                           
                           # Determine PostgreSQL type
                           pg_type = get_pg_type(field)
                           
                           field_info = {
-                              "id": field_id,
+                              "id": field_id.lower(),
                               "name": field_name,
-                              "key": field.get("key", ""),
+                              "key": field.get("key", "").lower(),
                               "custom": is_custom,
-                              "column_name": column_name,  # Using field ID directly
+                              "column_name": column_name,
                               "postgres_type": pg_type,
                               "schema": field.get("schema", {})
                           }
@@ -172,6 +171,15 @@ tasks:
           except Exception as e:
               logger.error(f"Fatal error: {str(e)}")
               raise
+
+      - id: store_files
+        type: io.kestra.plugin.core.namespace.UploadFiles
+        files: 
+        - "jira_field_mapping.json"
+        - "create_jira_bulk_issues_table.sql"
+        destination: /
+        conflict: OVERWRITE
+        namespace: "{{ flow.namespace }}"
 
 outputs:
   - id: total_fields
