@@ -1,0 +1,225 @@
+id: "jira_maintain_issues_table"
+namespace: "dev.integration"
+description: |
+  Maintains the Jira issues table schema by comparing the latest field definitions
+  with the existing table structure and making necessary modifications.
+  Uses Kestra PostgreSQL plugin for all database operations.
+
+variables:
+  schema_name: "raw"
+  table_name: "jira_issues_bulk"
+  pg_url: "jdbc:postgresql://postgres:5432/database01"
+  pg_username: "postgres"
+  pg_password: "your_secure_password"
+
+tasks:
+  - id: working_dir
+    type: io.kestra.plugin.core.flow.WorkingDirectory
+    outputFiles:
+      - "*.sql"
+    tasks:
+      - id: fetch_latest_schema
+        type: io.kestra.plugin.core.namespace.DownloadFiles
+        namespace: "dev.integration"
+        files:
+          - jira_field_mapping.json
+
+      - id: get_existing_columns
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        url: "{{ vars.pg_url }}"
+        username: "{{ vars.pg_username }}"
+        password: "{{ vars.pg_password }}"
+        fetchType: FETCH
+        sql: |
+          SELECT 
+              c.column_name,
+              CASE 
+                  WHEN c.data_type = 'ARRAY' THEN c.udt_name || '[]'
+                  WHEN c.data_type = 'character varying' THEN 'varchar'
+                  ELSE c.data_type
+              END as data_type,
+              c.character_maximum_length,
+              c.column_default,
+              c.is_nullable = 'YES' as is_nullable
+          FROM information_schema.columns c
+          WHERE c.table_schema = 'raw'
+          AND c.table_name = 'jira_issues_bulk'
+          ORDER BY c.ordinal_position;
+
+      - id: generate_maintenance_sql
+        type: io.kestra.plugin.scripts.python.Script
+        inputFiles: 
+          existing_columns: "{{ outputs.get_existing_columns.rows }}"
+        namespaceFiles:
+          enabled: true
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+          pullPolicy: IF_NOT_PRESENT
+        containerImage: "kestra-python:latest"
+        script: |
+          import json
+          import kestra
+          import logging
+          
+          logger = logging.getLogger(__name__)
+          logger.setLevel(logging.INFO)
+
+          def get_existing_columns(existing_columns):
+              """Convert existing columns to a dictionary for easier comparison"""
+              columns = {}
+              
+              # Log the structure of existing_columns for debugging
+              logger.info(f"Existing columns structure: {existing_columns}")
+              
+              for row in existing_columns:
+                  col_name = row['column_name'].lower()
+                  data_type = row['data_type']
+
+                  # Handle character varying by converting to varchar
+                  data_type = data_type.replace('character varying', 'varchar')
+
+                  # Add character length for varchar types
+                  if row.get('character_maximum_length') and 'varchar' in data_type:
+                      data_type = f"{data_type}({row['character_maximum_length']})"
+
+                  columns[col_name] = {
+                      'data_type': data_type.lower(),
+                      'exists': True
+                  }
+              return columns
+
+          def generate_maintenance_sql(field_mapping, existing_columns):
+              """Generate SQL for table maintenance based on differences"""
+              maintenance_sql = []
+
+              # Add schema creation if needed
+              maintenance_sql.append("""
+              DO $$ 
+              BEGIN
+                  -- Ensure schema exists
+                  CREATE SCHEMA IF NOT EXISTS raw;
+              """)
+
+              fields = field_mapping['fields']
+
+              # Process each field from the mapping
+              for field in fields:
+                  column_name = field['column_name']
+                  pg_type = field['postgres_type']
+
+                  # Check if column exists
+                  if column_name not in existing_columns:
+                      # New column
+                      maintenance_sql.append(f"""
+                  -- Add missing column {column_name}
+                  IF NOT EXISTS (
+                      SELECT FROM information_schema.columns 
+                      WHERE table_schema = 'raw'
+                      AND table_name = 'jira_issues_bulk'
+                      AND column_name = '{column_name}'
+                  ) THEN
+                      ALTER TABLE raw.jira_issues_bulk 
+                      ADD COLUMN {column_name} {pg_type};
+                  END IF;""")
+                  else:
+                      # Column exists - possibly alter type
+                      existing_type = existing_columns[column_name]['data_type']
+                      if existing_type.lower() != pg_type.lower():
+                          maintenance_sql.append(f"""
+                  -- Modify column type for {column_name}
+                  IF EXISTS (
+                      SELECT FROM information_schema.columns 
+                      WHERE table_schema = 'raw'
+                      AND table_name = 'jira_issues_bulk'
+                      AND column_name = '{column_name}'
+                      AND data_type != '{pg_type}'
+                  ) THEN
+                      ALTER TABLE raw.jira_issues_bulk 
+                      ALTER COLUMN {column_name} TYPE {pg_type} USING {column_name}::{pg_type};
+                  END IF;""")
+
+              # Close the DO block
+              maintenance_sql.append("""
+              END $$;
+              """)
+
+              return "\n".join(maintenance_sql)
+
+          try:
+
+              # Access the outputs from the "get_existing_columns" task
+              query_output_str = """{{ outputs.get_existing_columns.rows | toJson }}"""
+              query_output = json.loads(query_output_str)
+
+
+              # Log the raw output for debugging
+              logger.info(f"Raw query output: {query_output}")
+
+              # Convert existing columns to a dictionary
+              existing_cols_dict = get_existing_columns(query_output)
+
+              # Load the field mapping from file
+              with open("jira_field_mapping.json", "r") as f:
+                  field_mapping = json.load(f)
+
+              # Generate maintenance SQL
+              sql = generate_maintenance_sql(field_mapping, existing_cols_dict)
+              logger.info(sql)
+
+              # Write SQL to file
+              with open("jira_maintain_issues_table.sql", "w") as f:
+                  f.write(sql)
+
+              logger.info("Successfully generated maintenance SQL")
+
+          except Exception as e:
+              logger.error(f"Error generating maintenance SQL: {str(e)}")
+              raise
+
+      - id: jira_maintain_issues_table
+        type: io.kestra.plugin.core.namespace.UploadFiles
+        files:
+          - "jira_maintain_issues_table.sql"
+        destination: /
+        conflict: OVERWRITE
+        namespace: "{{ flow.namespace }}"
+
+      - id: execute_maintenance
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        url: "{{ vars.pg_url }}"
+        username: "{{ vars.pg_username }}"
+        password: "{{ vars.pg_password }}"
+        sql: |
+          {{ read('/jira_maintain_issues_table.sql') }}
+
+      - id: verify_schema
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        url: "{{ vars.pg_url }}"
+        username: "{{ vars.pg_username }}"
+        password: "{{ vars.pg_password }}"
+        fetchType: FETCH
+        sql: |
+          SELECT column_name, data_type
+          FROM information_schema.columns 
+          WHERE table_schema = '{{ vars.schema_name }}' 
+          AND table_name = '{{ vars.table_name }}'
+          ORDER BY ordinal_position;
+
+
+
+triggers:
+  - id: after_field_mapping
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlowCondition
+        namespace: "dev.integration"
+        flowId: "jira_get_all_fields_output_map_and_table"
+
+outputs:
+  - id: final_schema
+    type: JSON
+    value: "{{ outputs.verify_schema }}"
+
+  - id: get_existing_columns_debug
+    type: ARRAY
+    value: "{{ outputs.get_existing_columns.rows }}"
