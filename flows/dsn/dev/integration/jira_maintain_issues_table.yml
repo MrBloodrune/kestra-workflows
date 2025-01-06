@@ -16,7 +16,7 @@ tasks:
   - id: working_dir
     type: io.kestra.plugin.core.flow.WorkingDirectory
     outputFiles:
-      - "*.sql"
+      - "jira_maintain_issues_table.sql"
     tasks:
       - id: fetch_latest_schema
         type: io.kestra.plugin.core.namespace.DownloadFiles
@@ -190,14 +190,14 @@ tasks:
         username: "{{ vars.pg_username }}"
         password: "{{ vars.pg_password }}"
         sql: |
-          {{ read('/jira_maintain_issues_table.sql') }}
+              {{ read('jira_maintain_issues_table.sql') }}
 
       - id: verify_schema
         type: io.kestra.plugin.jdbc.postgresql.Query
         url: "{{ vars.pg_url }}"
         username: "{{ vars.pg_username }}"
         password: "{{ vars.pg_password }}"
-        fetchType: FETCH
+        fetchType: STORE
         sql: |
           SELECT column_name, data_type
           FROM information_schema.columns 
@@ -219,7 +219,3 @@ outputs:
   - id: final_schema
     type: JSON
     value: "{{ outputs.verify_schema }}"
-
-  - id: get_existing_columns_debug
-    type: ARRAY
-    value: "{{ outputs.get_existing_columns.rows }}"
