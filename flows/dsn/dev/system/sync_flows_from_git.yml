@@ -11,7 +11,7 @@ tasks:
       - "Checking secrets..."
       - "GITHUB_USERNAME is {{ secret('GITHUB_USERNAME') ? 'set' : 'NOT set' }}."
       - "GITHUB_ACCESS_TOKEN is {{ secret('GITHUB_ACCESS_TOKEN') ? 'set' : 'NOT set' }}."
-      - "WEBHOOK_KEY is {{ secret('WEBHOOK_KEY') ? 'set' : 'NOT set' }}."
+      - "WEBHOOK_KEY is {{ secret('GITHUB_WEBHOOK_KEY') ? 'set' : 'NOT set' }}."
   - id: git_sync
     type: io.kestra.plugin.git.SyncFlows
     url: https://github.com/DSN-Christian/kestra-dsn-workflows
