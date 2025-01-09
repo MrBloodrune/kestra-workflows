@@ -1,0 +1,286 @@
+id: "jira_bulk_refresh"
+namespace: "dsn.dev.integration"
+description: |
+  Bulk refresh workflow that retrieves all Jira issues, stores them in raw.jira_issues,
+  and upserts the most recent version into core.jira_issues_clean.
+  Will run on 24 hour schedule to maintian data freshness.
+
+variables:
+  jira_base_url: "https://diamondstatenetworks.atlassian.net"
+  jira_auth: "Y2hyaXN0aWFuQGRpYW1vbmRzdGF0ZW5ldHdvcmtzLmNvbTpBVEFUVDN4RmZHRjBOTk0wYWJ5MHZfMEp6NHVlWHZEMGQxM3VYbzIxZkdzcGFUVGlwc2JZZUpjcjhZOTFkejBqeGcyUDlQcTV3eTNVNkJ1R3JrVk5xbmRNcGRIRnNmMlAwcW1hNHV4UGw4Z3pvNU8yRl8ybk5fNnhTY1p5UUtiMG9ablJKdlE2cEpZc2NTbVFjN0QyWFl6LV9wX1dyWVIwZjNpQ0hydzFyNDR4UFFKdTY5MjJaLXM9MzdFMkVFODA="       # | base64 user:token
+  pg_url: "jdbc:postgresql://postgres:5432/database01"
+  pg_username: "postgres"
+  pg_password: "your_secure_password"
+  jql: "project in ('NOC','DSN')"   # JQL
+
+tasks:
+  - id: working_dir
+    type: io.kestra.plugin.core.flow.WorkingDirectory
+    outputFiles:
+      - "*.json"
+      - "*.csv"
+    tasks:
+      # 1) Ensure RAW and CORE tables exist
+      - id: ensure_tables
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        url: "{{ vars.pg_url }}"
+        username: "{{ vars.pg_username }}"
+        password: "{{ vars.pg_password }}"
+        fetchType: NONE
+        sql: |
+          CREATE SCHEMA IF NOT EXISTS raw;
+          CREATE SCHEMA IF NOT EXISTS core;
+
+          -- Raw table for storing snapshots
+          CREATE TABLE IF NOT EXISTS raw.jira_issues (
+            id BIGSERIAL PRIMARY KEY,
+            project_key TEXT NOT NULL,
+            jira_issue_id TEXT NOT NULL,
+            issue_key TEXT NOT NULL,
+            created TIMESTAMPTZ,
+            updated TIMESTAMPTZ,
+            summary TEXT,
+            fields_json JSONB,
+            source VARCHAR(50) DEFAULT 'jira',
+            ingestion_timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+
+          -- "Clean" table for most recent version
+          CREATE TABLE IF NOT EXISTS core.jira_issues_clean (
+            id BIGSERIAL PRIMARY KEY,
+            project_key TEXT NOT NULL,
+            jira_issue_id TEXT NOT NULL,
+            issue_key TEXT NOT NULL,
+            created TIMESTAMPTZ,
+            updated TIMESTAMPTZ,
+            summary TEXT,
+            fields_json JSONB,
+            source VARCHAR(50) DEFAULT 'jira',
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT jira_issues_clean_issue_key_unique UNIQUE (issue_key)
+            );
+
+          -- Indexes for raw.jira_issues
+          CREATE INDEX IF NOT EXISTS idx_raw_jira_issues_issue_key
+            ON raw.jira_issues(issue_key);
+          CREATE INDEX IF NOT EXISTS idx_raw_jira_issues_jira_issue_id
+            ON raw.jira_issues(jira_issue_id);
+          CREATE INDEX IF NOT EXISTS idx_raw_jira_issues_project_key
+            ON raw.jira_issues(project_key);
+
+          -- GIN index on raw's JSON field (optional but helpful if you query raw frequently)
+          CREATE INDEX IF NOT EXISTS idx_raw_jira_issues_fields_json
+            ON raw.jira_issues
+            USING GIN (fields_json jsonb_path_ops);
+
+          -- Indexes for core.jira_issues_clean
+          CREATE INDEX IF NOT EXISTS idx_core_jira_issues_clean_issue_key
+            ON core.jira_issues_clean(issue_key);
+          CREATE INDEX IF NOT EXISTS idx_core_jira_issues_clean_jira_issue_id
+            ON core.jira_issues_clean(jira_issue_id);
+          CREATE INDEX IF NOT EXISTS idx_core_jira_issues_clean_project_key
+            ON core.jira_issues_clean(project_key);
+
+          -- GIN index for JSONB queries in core
+          CREATE INDEX IF NOT EXISTS idx_jira_issues_clean_fields_json
+            ON core.jira_issues_clean
+            USING GIN (fields_json jsonb_path_ops);
+
+      # 2) Fetch Issues -> CSV
+      - id: fetch_and_transform
+        type: io.kestra.plugin.scripts.python.Script
+        outputFiles:
+          - "jira_issues.csv"
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+          pullPolicy: IF_NOT_PRESENT
+        containerImage: "kestra-python:latest"
+        timeout: PT15M
+        retry:
+          type: constant
+          interval: PT1M
+          maxAttempt: 3
+        beforeCommands:
+          - pip install requests pandas
+        script: |
+          import requests
+          import json
+          import csv
+          import pandas as pd
+          from datetime import datetime
+          from kestra import Kestra
+          
+          logger = Kestra.logger()
+
+          jira_base_url = "{{ vars.jira_base_url }}"
+          jira_auth = "{{ vars.jira_auth }}"
+          jql = "{{ vars.jql }}"
+
+          def fetch_issues(start_at=0, max_results=100):
+              """Fetch a batch of Jira issues with pagination."""
+              logger.info(f"Fetching batch starting at {start_at}")
+              try:
+                  response = requests.get(
+                      f"{jira_base_url}/rest/api/3/search",
+                      params={
+                          "jql": jql,
+                          "startAt": start_at,
+                          "maxResults": max_results,
+                          "fields": "*all",
+                          "expand": "renderedFields,changelog,schema,names"
+                      },
+                      headers={
+                          "Authorization": f"Basic {jira_auth}",
+                          "Accept": "application/json"
+                      },
+                      timeout=30
+                  )
+                  response.raise_for_status()
+                  return response.json()
+              except Exception as e:
+                  logger.error(f"Error fetching issues: {e}")
+                  raise
+
+          # 1) Initial fetch to see how many total issues
+          first_batch = fetch_issues()
+          total = first_batch.get("total", 0)
+          issues = first_batch.get("issues", [])
+          logger.info(f"Total issues found: {total}")
+
+          # 2) Fetch subsequent batches if needed
+          start_at = len(issues)
+          while start_at < total:
+              more = fetch_issues(start_at=start_at)
+              fetched_issues = more.get("issues", [])
+              issues.extend(fetched_issues)
+              start_at += len(fetched_issues)
+
+          # 3) Transform each issue into a row
+          records = []
+          for issue in issues:
+              fields = issue.get("fields", {})
+
+              # Attempt to get project_key from the issue if available
+              # Typically: fields.project.key
+              project_info = fields.get("project", {})
+              project_key = project_info.get("key", "UNKNOWN_PROJECT")
+
+              transformed = {
+                  "project_key": project_key,
+                  "jira_issue_id": issue.get("id"),
+                  "issue_key": issue.get("key"),
+                  "created": fields.get("created"),
+                  "updated": fields.get("updated"),
+                  "summary": fields.get("summary"),
+                  "fields_json": json.dumps(fields, ensure_ascii=False),
+                  "source": "jira",
+                  "ingestion_timestamp": datetime.utcnow().isoformat()
+              }
+              records.append(transformed)
+
+          # 4) Write to CSV for bulk load
+          df = pd.DataFrame(records)
+          df.to_csv(
+              "jira_issues.csv",
+              index=False,
+              quoting=csv.QUOTE_ALL
+          )
+          
+          Kestra.outputs({
+              "issue_count": len(records),
+              "timestamp_utc": datetime.utcnow().isoformat()
+          })
+
+      # 3) Copy CSV into raw.jira_issues
+      - id: load_to_raw
+        type: io.kestra.plugin.jdbc.postgresql.CopyIn
+        url: "{{ vars.pg_url }}"
+        username: "{{ vars.pg_username }}"
+        password: "{{ vars.pg_password }}"
+        table: "raw.jira_issues"
+        columns:
+          - project_key
+          - jira_issue_id
+          - issue_key
+          - created
+          - updated
+          - summary
+          - fields_json
+          - source
+          - ingestion_timestamp
+        from: "{{ outputs.fetch_and_transform.outputFiles['jira_issues.csv'] }}"
+        format: CSV
+        header: true
+        delimiter: ","
+        nullString: ""
+        quote: '"'
+
+      # 4) Upsert into core.jira_issues_clean
+      - id: upsert_clean
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        url: "{{ vars.pg_url }}"
+        username: "{{ vars.pg_username }}"
+        password: "{{ vars.pg_password }}"
+        fetchType: NONE
+        sql: |
+          WITH latest AS (
+            SELECT DISTINCT ON (r.issue_key)
+              r.project_key,
+              r.jira_issue_id,
+              r.issue_key,
+              r.created::timestamptz    AS created,
+              r.updated::timestamptz    AS updated,
+              r.summary,
+              r.fields_json::jsonb      AS fields_json,
+              r.source,
+              r.ingestion_timestamp::timestamptz
+            FROM raw.jira_issues r
+            WHERE r.ingestion_timestamp >= NOW() - INTERVAL '1 day'
+            -- Pick only the single "latest" row for each issue_key
+            ORDER BY r.issue_key, r.ingestion_timestamp DESC
+          )
+          INSERT INTO core.jira_issues_clean (
+            project_key,
+            jira_issue_id,
+            issue_key,
+            created,
+            updated,
+            summary,
+            fields_json,
+            source,
+            updated_at
+          )
+          SELECT
+            l.project_key,
+            l.jira_issue_id,
+            l.issue_key,
+            l.created,
+            l.updated,
+            l.summary,
+            l.fields_json,
+            l.source,
+            NOW() as updated_at
+          FROM latest l
+          ON CONFLICT (issue_key)
+          DO UPDATE
+            SET project_key   = EXCLUDED.project_key,
+                jira_issue_id = EXCLUDED.jira_issue_id,
+                created       = EXCLUDED.created,
+                updated       = EXCLUDED.updated,
+                summary       = EXCLUDED.summary,
+                fields_json   = EXCLUDED.fields_json,
+                source        = EXCLUDED.source,
+                updated_at    = NOW();
+
+triggers:
+  - id: daily_2am_trigger
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 2 * * *"
+
+outputs:
+  - id: issue_count
+    type: INT
+    value: "{{ outputs.fetch_and_transform.vars.issue_count }}"
+  - id: timestamp_utc
+    type: STRING
+    value: "{{ outputs.fetch_and_transform.vars.timestamp_utc }}"
