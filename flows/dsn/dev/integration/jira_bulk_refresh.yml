@@ -3,15 +3,15 @@ namespace: "dsn.dev.integration"
 description: |
   Bulk refresh workflow that retrieves all Jira issues, stores them in raw.jira_issues,
   and upserts the most recent version into core.jira_issues_clean.
-  Will run on 24 hour schedule to maintian data freshness.
+  Includes project_key for easier filtering and searching.
 
 variables:
   jira_base_url: "https://diamondstatenetworks.atlassian.net"
-  jira_auth: "Y2hyaXN0aWFuQGRpYW1vbmRzdGF0ZW5ldHdvcmtzLmNvbTpBVEFUVDN4RmZHRjBOTk0wYWJ5MHZfMEp6NHVlWHZEMGQxM3VYbzIxZkdzcGFUVGlwc2JZZUpjcjhZOTFkejBqeGcyUDlQcTV3eTNVNkJ1R3JrVk5xbmRNcGRIRnNmMlAwcW1hNHV4UGw4Z3pvNU8yRl8ybk5fNnhTY1p5UUtiMG9ablJKdlE2cEpZc2NTbVFjN0QyWFl6LV9wX1dyWVIwZjNpQ0hydzFyNDR4UFFKdTY5MjJaLXM9MzdFMkVFODA="       # | base64 user:token
+  jira_auth: "email:key"       # e.g., base64 of user:token
   pg_url: "jdbc:postgresql://postgres:5432/database01"
   pg_username: "postgres"
   pg_password: "your_secure_password"
-  jql: "project in ('NOC','DSN')"   # JQL
+  jql: "project in ('NOC','DSN')"   # Example JQL for multiple projects
 
 tasks:
   - id: working_dir
@@ -26,7 +26,7 @@ tasks:
         url: "{{ vars.pg_url }}"
         username: "{{ vars.pg_username }}"
         password: "{{ vars.pg_password }}"
-        fetchType: NONE
+        fetchOne: false
         sql: |
           CREATE SCHEMA IF NOT EXISTS raw;
           CREATE SCHEMA IF NOT EXISTS core;
@@ -56,9 +56,8 @@ tasks:
             summary TEXT,
             fields_json JSONB,
             source VARCHAR(50) DEFAULT 'jira',
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT jira_issues_clean_issue_key_unique UNIQUE (issue_key)
-            );
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
 
           -- Indexes for raw.jira_issues
           CREATE INDEX IF NOT EXISTS idx_raw_jira_issues_issue_key
@@ -68,14 +67,14 @@ tasks:
           CREATE INDEX IF NOT EXISTS idx_raw_jira_issues_project_key
             ON raw.jira_issues(project_key);
 
-          -- GIN index on raw's JSON field (optional but helpful if you query raw frequently)
+          -- GIN index on raw's JSON field
           CREATE INDEX IF NOT EXISTS idx_raw_jira_issues_fields_json
             ON raw.jira_issues
             USING GIN (fields_json jsonb_path_ops);
 
           -- Indexes for core.jira_issues_clean
-          CREATE INDEX IF NOT EXISTS idx_core_jira_issues_clean_issue_key
-            ON core.jira_issues_clean(issue_key);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_core_jira_issues_clean_issue_key_unique
+            ON core.jira_issues_clean (issue_key);
           CREATE INDEX IF NOT EXISTS idx_core_jira_issues_clean_jira_issue_id
             ON core.jira_issues_clean(jira_issue_id);
           CREATE INDEX IF NOT EXISTS idx_core_jira_issues_clean_project_key
@@ -221,61 +220,49 @@ tasks:
         url: "{{ vars.pg_url }}"
         username: "{{ vars.pg_username }}"
         password: "{{ vars.pg_password }}"
-        fetchType: NONE
+        fetchOne: false
         sql: |
           WITH latest AS (
-            SELECT DISTINCT ON (r.issue_key)
-              r.project_key,
-              r.jira_issue_id,
-              r.issue_key,
-              r.created::timestamptz    AS created,
-              r.updated::timestamptz    AS updated,
-              r.summary,
-              r.fields_json::jsonb      AS fields_json,
-              r.source,
-              r.ingestion_timestamp::timestamptz
-            FROM raw.jira_issues r
-            WHERE r.ingestion_timestamp >= NOW() - INTERVAL '1 day'
-            -- Pick only the single "latest" row for each issue_key
-            ORDER BY r.issue_key, r.ingestion_timestamp DESC
+              SELECT DISTINCT ON (r.issue_key)
+                  r.project_key,
+                  r.jira_issue_id,
+                  r.issue_key,
+                  r.created::timestamptz AS created,
+                  r.updated::timestamptz AS updated,
+                  r.summary,
+                  r.fields_json::jsonb AS fields_json,
+                  r.source,
+                  r.ingestion_timestamp::timestamptz
+              FROM raw.jira_issues r
+              WHERE r.ingestion_timestamp >= NOW() - INTERVAL '1 day'
+              ORDER BY r.issue_key, r.ingestion_timestamp DESC
           )
           INSERT INTO core.jira_issues_clean (
-            project_key,
-            jira_issue_id,
-            issue_key,
-            created,
-            updated,
-            summary,
-            fields_json,
-            source,
-            updated_at
+              project_key, jira_issue_id, issue_key, created, updated,
+              summary, fields_json, source, updated_at
           )
           SELECT
-            l.project_key,
-            l.jira_issue_id,
-            l.issue_key,
-            l.created,
-            l.updated,
-            l.summary,
-            l.fields_json,
-            l.source,
-            NOW() as updated_at
-          FROM latest l
+              latest.project_key,
+              latest.jira_issue_id,
+              latest.issue_key,
+              latest.created,
+              latest.updated,
+              latest.summary,
+              latest.fields_json,
+              latest.source,
+              NOW() AS updated_at
+          FROM latest
           ON CONFLICT (issue_key)
           DO UPDATE
-            SET project_key   = EXCLUDED.project_key,
-                jira_issue_id = EXCLUDED.jira_issue_id,
-                created       = EXCLUDED.created,
-                updated       = EXCLUDED.updated,
-                summary       = EXCLUDED.summary,
-                fields_json   = EXCLUDED.fields_json,
-                source        = EXCLUDED.source,
-                updated_at    = NOW();
+              SET project_key   = EXCLUDED.project_key,
+                  jira_issue_id = EXCLUDED.jira_issue_id,
+                  created       = EXCLUDED.created,
+                  updated       = EXCLUDED.updated,
+                  summary       = EXCLUDED.summary,
+                  fields_json   = EXCLUDED.fields_json,
+                  source        = EXCLUDED.source,
+                  updated_at    = NOW();
 
-triggers:
-  - id: daily_2am_trigger
-    type: io.kestra.plugin.core.trigger.Schedule
-    cron: "0 2 * * *"
 
 outputs:
   - id: issue_count
